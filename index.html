@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>我的专属音乐图床</title>
+<style>
+  body { font-family: -apple-system, sans-serif; padding: 15px; background: #f6f8fa; color: #333; }
+  .header { background: linear-gradient(135deg, #6e8efb, #a777e3); color: white; padding: 15px; border-radius: 12px; margin-bottom: 15px; box-shadow: 0 4px 10px rgba(110, 142, 251, 0.3); display: flex; justify-content: space-between; align-items: center; }
+  .header h2 { margin: 0; font-size: 18px; }
+  .header p { margin: 5px 0 0 0; font-size: 12px; opacity: 0.8; }
+  .box { background: white; padding: 15px; border-radius: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); margin-bottom: 15px; }
+  label { font-size: 14px; display: block; margin-bottom: 5px; }
+  input[type="text"], input[type="password"] { width: 100%; padding: 12px; margin-bottom: 10px; border: 1px solid #ddd; border-radius: 8px; box-sizing: border-box; font-size: 14px; }
+  button { background: #6e8efb; color: white; border: none; padding: 12px; border-radius: 8px; cursor: pointer; width: 100%; font-size: 15px; transition: 0.2s; }
+  button:active { background: #5a7ae8; }
+  button:disabled { background: #ccc; }
+  .drop-zone { border: 2px dashed #a777e3; padding: 30px; text-align: center; border-radius: 12px; color: #6e8efb; margin-bottom: 15px; background: #fdfbff; transition: 0.2s; }
+  .drop-zone.dragover { background: #f0e8ff; border-color: #6e8efb; }
+  .gallery { display: grid; grid-template-columns: 1fr; gap: 15px; }
+  .card { background: white; padding: 15px; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); word-break: break-all; }
+  .card audio { width: 100%; margin-top: 10px; }
+  .card img { max-width: 100%; border-radius: 8px; }
+  .url-box { width: 100%; padding: 10px; font-size: 12px; margin-top: 10px; border: 1px solid #ddd; border-radius: 8px; box-sizing: border-box; background: #f9f9f9; }
+  .actions { display: flex; gap: 8px; margin-top: 10px; }
+  .actions button { padding: 8px; font-size: 13px; flex: 1; }
+  .actions button.danger { background: #ff4d4f; }
+  .toast { position: fixed; top: 20px; left: 50%; transform: translateX(-50%); background: #333; color: white; padding: 10px 20px; border-radius: 20px; font-size: 14px; z-index: 1000; opacity: 0; transition: opacity 0.3s; pointer-events: none; box-shadow: 0 4px 10px rgba(0,0,0,0.2); }
+  .toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <h2>🎵 音乐图床</h2>
+    <p>轻松管理你的 GitHub 音视频外链</p>
+  </div>
+  <button onclick="loadFiles()" style="width: auto; padding: 8px 12px; font-size: 13px; background: rgba(255,255,255,0.3); border-radius: 6px;">刷新图库</button>
+</div>
+
+<div class="box">
+  <label><strong>1. 配置 Token</strong> (仅保存在本地浏览器)</label>
+  <input type="password" id="tokenInput" placeholder="粘贴 ghp_ 开头的 Token">
+  <button onclick="saveToken()">保存 Token</button>
+</div>
+
+<div class="box">
+  <label><strong>2. 上传文件</strong></label>
+  <div class="drop-zone" id="dropZone" onclick="document.getElementById('fileInput').click()">
+    点击这里选择文件，或拖拽到这里
+  </div>
+  <input type="file" id="fileInput" style="display: none;" multiple onchange="handleFiles(this.files)">
+  <div id="progress" style="color: #6e8efb; font-size: 13px; text-align: center; margin-top: 5px; min-height: 18px;"></div>
+</div>
+
+<div class="gallery" id="gallery"></div>
+
+<!-- 用于显示漂亮的Toast提示 -->
+<div id="toastBox" class="toast"></div>
+
+<script>
+  // ================= 已为你填好，无需修改 =================
+  const GITHUB_USER = 'qing122333';
+  const REPO_NAME = 'lalala';
+  const BRANCH = 'main';
+  const BASE_URL = `https://${GITHUB_USER}.github.io/${REPO_NAME}/`;
+  // ========================================================
+
+  let token = localStorage.getItem('gh_token') || '';
+  document.getElementById('tokenInput').value = token;
+
+  // Toast 提示组件
+  function showToast(message, type = 'info') {
+    const box = document.getElementById('toastBox');
+    box.innerText = message;
+    box.style.background = type === 'success' ? '#52c41a' : type === 'error' ? '#ff4d4f' : '#333';
+    box.classList.add('show');
+    setTimeout(() => { box.classList.remove('show'); }, 2500);
+  }
+
+  function saveToken() {
+    token = document.getElementById('tokenInput').value.trim();
+    if (!token) return showToast('Token 不能为空', 'error');
+    localStorage.setItem('gh_token', token);
+    showToast('Token 保存成功', 'success');
+    loadFiles();
+  }
+
+  // 拖拽事件监听
+  const dropZone = document.getElementById('dropZone');
+  dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
+  dropZone.addEventListener('dragleave', (e) => { e.preventDefault(); dropZone.classList.remove('dragover'); });
+  dropZone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    dropZone.classList.remove('dragover');
+    handleFiles(e.dataTransfer.files);
+  });
+
+  function handleFiles(files) {
+    if (!token) return showToast('请先配置并保存 Token！', 'error');
+    if (!files.length) return;
+
+    Array.from(files).forEach(async file => {
+      const reader = new FileReader();
+      reader.onload = async () => {
+        const base64Content = reader.result.split(',')[1];
+        document.getElementById('progress').innerText = `正在上传：${file.name} ...`;
+        
+        const url = `https://api.github.com/repos/${GITHUB_USER}/${REPO_NAME}/contents/${file.name}`;
+        try {
+          const res = await fetch(url, {
+            method: 'PUT',
+            headers: { 'Authorization': `token ${token}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message: `上传 ${file.name}`, content: base64Content, branch: BRANCH })
+          });
+          
+          if (res.ok) {
+            document.getElementById('progress').innerText = '';
+            showToast(`${file.name} 上传成功`, 'success');
+            loadFiles();
+          } else {
+            document.getElementById('progress').innerText = '';
+            showToast(`${file.name} 上传失败 (可能文件过大或Token无权限)`, 'error');
+          }
+        } catch (err) {
+          document.getElementById('progress').innerText = '';
+          showToast(`网络错误，${file.name} 上传失败`, 'error');
+        }
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  async function loadFiles() {
+    if (!token) return;
+    const url = `https://api.github.com/repos/${GITHUB_USER}/${REPO_NAME}/contents/?ref=${BRANCH}`;
+    try {
+      const res = await fetch(url, { headers: { 'Authorization': `token ${token}` } });
+      if (!res.ok) throw new Error('获取失败');
+      const files = await res.json();
+      
+      const gallery = document.getElementById('gallery');
+      gallery.innerHTML = '';
+      
+      const validFiles = files.filter(f => f.name !== 'index.html' && f.name !== 'README.md' && f.type === 'file');
+      
+      if(validFiles.length === 0) {
+        gallery.innerHTML = '<div style="text-align:center; color:#999; padding:20px; font-size:14px;">还没有上传任何文件哦</div>';
+        return;
+      }
+
+      validFiles.forEach(file => {
+        const fileUrl = BASE_URL + file.name;
+        const isAudio = /\.(mp3|wav|m4a|ogg|flac|aac)$/i.test(file.name);
+        const isImage = /\.(jpg|jpeg|png|gif|webp|svg|bmp|ico)$/i.test(file.name);
+        
+        let mediaHtml = '';
+        if (isAudio) mediaHtml = `<audio controls src="${fileUrl}"></audio>`;
+        if (isImage) mediaHtml = `<img src="${fileUrl}" alt="${file.name}">`;
+
+        gallery.innerHTML += `
+          <div class="card">
+            <strong style="font-size:14px;">${file.name}</strong>
+            ${mediaHtml}
+            <input type="text" class="url-box" value="${fileUrl}" readonly onclick="this.select()">
+            <div class="actions">
+              <button onclick="copyText('${fileUrl}')">复制</button>
+              <button onclick="window.open('${fileUrl}')">打开</button>
+              <button class="danger" onclick="deleteFile('${file.name}', '${file.sha}')">删除</button>
+            </div>
+          </div>
+        `;
+      });
+    } catch (err) {
+      showToast('加载列表失败，请检查 Token 是否有 repo 权限', 'error');
+    }
+  }
+
+  function copyText(text) {
+    navigator.clipboard.writeText(text).then(() => {
+      showToast('链接已复制到剪贴板', 'success');
+    }).catch(() => {
+      showToast('复制失败，请手动复制', 'error');
+    });
+  }
+
+  async function deleteFile(name, sha) {
+    if (!confirm(`⚠️ 确定要永久删除 ${name} 吗？不可恢复！`)) return;
+    const url = `https://api.github.com/repos/${GITHUB_USER}/${REPO_NAME}/contents/${name}`;
+    try {
+      const res = await fetch(url, {
+        method: 'DELETE',
+        headers: { 'Authorization': `token ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: `删除 ${name}`, sha: sha, branch: BRANCH })
+      });
+      if (res.ok) { 
+        showToast('文件已删除', 'success'); 
+        loadFiles(); 
+      } else {
+        showToast('删除失败，权限不足', 'error');
+      }
+    } catch(err) {
+      showToast('网络错误，删除失败', 'error');
+    }
+  }
+
+  // 页面加载初始化
+  if (token) loadFiles();
+</script>
+</body>
+</html>
